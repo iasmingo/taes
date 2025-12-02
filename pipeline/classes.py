@@ -44,6 +44,8 @@ Use case diagram:
 
 The final result must be a valid UML diagram in PlantUML, with no additional explanations or comments.
 
+DO NOT wrap the output in Markdown code fences.
+DO NOT use ``` or any code block delimiters.
 Return ONLY a valid PlantUML code.
 """
 
