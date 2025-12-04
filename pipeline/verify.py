@@ -1,4 +1,5 @@
 from utils import call_llm
+from scoring import generate_report
 import json
 
 
@@ -12,100 +13,123 @@ sequence = open("data/sequence.puml").read()
 prompt = f"""
 You are a FORMAL CONSISTENCY VERIFIER for UML models.
 
-Your task is to analyze whether the provided artifacts are CONSISTENT with each other,
-following strict and objective rules.
+Your task is to identify and categorize ALL inconsistencies between artifacts.
+DO NOT evaluate severity - just report what you find objectively.
+
+# ARTIFACTS TO ANALYZE
 
 The pipeline consists of:
-1) A JSON extracted directly from the case study text;
-2) A USE CASE DIAGRAM derived from this JSON;
-3) A CLASS DIAGRAM derived from the JSON + use case diagram;
-4) A SEQUENCE DIAGRAM derived from the JSON + classes + use case diagram;
+1) A JSON extracted from case study text
+2) A USE CASE DIAGRAM derived from JSON
+3) A CLASS DIAGRAM derived from JSON + use case
+4) A SEQUENCE DIAGRAM derived from JSON + classes + use case
 
-You must evaluate consistency between:
-- JSON and use case diagram;
-- JSON and class diagram;
-- JSON and sequence diagram;
-- use case diagram and class diagram;
-- class diagram and sequence diagram.
-
-# ABSOLUTE RULES FOR THE ANALYSIS
-
-You MUST NOT:
-- correct any diagrams;
-- fill in gaps;
-- rewrite or reformulate content;
-- propose improvements;
-- infer information not literally present;
-- create entities that do not exist in the input;
-- assume alternative names or semantic equivalence.
+# RULES
 
 You MUST:
-- identify ALL inconsistencies observable strictly from the provided text;
-- rely ONLY on the literal content of the artifacts;
-- follow the checklist below exactly as written.
+- Report ONLY literal inconsistencies found
+- Use EXACTLY the error types specified below
+- Count ALL elements accurately
+- NOT assume, infer, or fill gaps
 
-# FORMAL CONSISTENCY CHECKLIST
+You MUST NOT:
+- Correct diagrams
+- Propose improvements
+- Create missing information
+- Assume semantic equivalence
 
-You must verify at least the following:
+# ERROR TYPES YOU CAN REPORT
 
-## JSON and use case diagram
-1) All "actors" in the JSON must appear in the use case diagram.
-2) The use case diagram must NOT contain actors not present in the JSON.
-3) JSON "events" (actions) must correspond to use cases.
-4) The use case diagram must NOT introduce actions absent from the JSON.
+For json_vs_usecase:
+- "missing_actor": Actor from JSON not in use case
+- "extra_actor": Actor in use case not in JSON
+- "missing_usecase": Event from JSON not mapped to use case
+- "extra_usecase": Use case not in JSON events
 
-## JSON and class diagram
-1) All JSON "entities" must appear as classes in the class diagram.
-2) The class diagram must NOT contain classes not present in the JSON.
-3) Methods in the class diagram must derive from JSON "events".
-4) Class relationships must correspond to JSON "textual_relations".
+For json_vs_classes:
+- "missing_entity": Entity from JSON not as class
+- "extra_class": Class not in JSON entities
+- "missing_relation": JSON relation not in class diagram
+- "missing_method": JSON event not mapped to method
 
-## JSON and sequence diagram
-1) All sequence diagram participants must exist as actors or entities in the JSON.
-2) All messages must correspond to JSON events.
-3) The message order and flow must not contradict explicit relations in the JSON.
+For json_vs_sequence:
+- "missing_participant": Actor/Entity not in sequence
+- "extra_participant": Participant not in JSON
+- "missing_message": Event not as message
+- "wrong_message_order": Order contradicts JSON
 
-## Use case diagram and class diagram
-1) Each functionality in the use case diagram must map to class-level operations.
-2) No class operation may represent behavior absent from the use case diagram.
+For usecase_vs_classes:
+- "usecase_not_mapped": Use case without method
+- "method_without_usecase": Method without use case
 
-## Class diagram and sequence diagram
-1) All sequence diagram lifelines must correspond to valid classes.
-2) All messages must correspond to existing class methods.
-3) The flow of the sequence diagram must be compatible with class relations.
+For classes_vs_sequence:
+- "lifeline_without_class": Lifeline without class
+- "message_without_method": Message without method
+- "incompatible_flow": Flow incompatible with classes
 
-# OUTPUT FORMAT (MANDATORY)
+# OUTPUT FORMAT
 
-Return ONLY a valid JSON with the structure:
+Return ONLY valid JSON:
 
-curly-brace
-  "json_vs_usecase": curly-brace
+{{
+  "json_vs_usecase": {{
     "status": "OK" or "ERROR",
-    "errors": ["...", "..."]
-  curly-brace,
-  "json_vs_classes": curly-brace
+    "errors": [
+      {{
+        "type": "one of the types above",
+        "element": "element name",
+        "details": "brief description"
+      }}
+    ],
+    "counts": {{
+      "total_actors_json": number,
+      "found_actors_usecase": number,
+      "total_events_json": number,
+      "found_usecases": number
+    }}
+  }},
+  "json_vs_classes": {{
     "status": "OK" or "ERROR",
-    "errors": ["...", "..."]
-  curly-brace,
-  "json_vs_sequence": curly-brace
+    "errors": [...],
+    "counts": {{
+      "total_entities_json": number,
+      "found_classes": number,
+      "total_relations_json": number,
+      "found_relations": number
+    }}
+  }},
+  "json_vs_sequence": {{
     "status": "OK" or "ERROR",
-    "errors": ["...", "..."]
-  curly-brace,
-  "usecase_vs_classes": curly-brace
+    "errors": [...],
+    "counts": {{
+      "total_participants_expected": number,
+      "found_participants": number,
+      "total_events_json": number,
+      "found_messages": number
+    }}
+  }},
+  "usecase_vs_classes": {{
     "status": "OK" or "ERROR",
-    "errors": ["...", "..."]
-  curly-brace,
-  "classes_vs_sequence": curly-brace
+    "errors": [...],
+    "counts": {{
+      "total_usecases": number,
+      "found_methods": number
+    }}
+  }},
+  "classes_vs_sequence": {{
     "status": "OK" or "ERROR",
-    "errors": ["...", "..."]
-  curly-brace,
+    "errors": [...],
+    "counts": {{
+      "total_lifelines": number,
+      "valid_lifelines": number,
+      "total_messages": number,
+      "valid_messages": number
+    }}
+  }},
   "overall_status": "OK" or "ERROR"
-curly-brace
+}}
 
-Rule:
-- overall_status = "ERROR" if ANY section contains an error.
-
-# ANALYZE THE FOLLOWING ARTIFACTS:
+# ARTIFACTS
 
 JSON:
 {json.dumps(root, indent=2)}
@@ -119,13 +143,15 @@ Class diagram:
 Sequence diagram:
 {sequence}
 
-DO NOT wrap the output in Markdown code fences.
-DO NOT use ``` or any code block delimiters.
-Return ONLY the JSON.
-
+Return ONLY the JSON. No markdown, no code fences.
 """
 
 output = call_llm(prompt)
 
+# Salvar verificação bruta
 with open("data/report.json", "w") as f:
     f.write(output)
+
+# Calcular scores e gerar relatório completo
+verification_result = json.loads(output)
+generate_report(verification_result, "data/score_report.json")
